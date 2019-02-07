@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- saved from url=(0065)http://localhost:12345/2019/01/29/configurable-builds-part-1.html -->
+<!-- saved from url=(0065)http://localhost:12345/2019/02/05/configurable-builds-part-1.html -->
 <html lang="en" itemscope="" itemtype="https://schema.org/WebPage"><head><meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
     
     <meta http-equiv="X-UA-Compatible" content="IE=edge">
@@ -37,7 +37,7 @@
       }
     </script>
 
-    <link rel="canonical" href="http://localhost:12345/2019/01/29/configurable-builds-part-1.html">
+    <link rel="canonical" href="http://localhost:12345/2019/02/05/configurable-builds-part-1.html">
     <link rel="alternate" type="application/rss+xml" title="Bazel Blog" href="http://localhost:12345/feed.xml">
 
     <!-- Webfont -->
@@ -157,16 +157,25 @@ By
   
 
 
-on <span class="text-muted">29 January 2019</span>
+on <span class="text-muted">05 February 2019</span>
 
             </div>
             <div class="blog-post-content">
-              <p>The larger your project gets, the more likely you have to build it in different
+              <p>One of Bazel's long-term goals is to make <code>$ bazel build //:all</code> "<em>just work</em>"
+so that every target builds "the right way", for whatever platform(s) you care
+about, using only flags that are genuinely interesting to you. This two-part
+series discusses the challenges involved and steps we're taking to get there.</p>
+
+<p>This is a deeper dive into themes covered in Bazel's <a href="https://bazel.build/roadmaps/configuration.html">configurability roadmap</a>.</p>
+
+<h2>Motivation</h2>
+
+<p>The larger your project gets, the more likely you have to build it different
 ways.</p>
 
 <p>Maybe you need Android, iOS, and desktop versions of your app. Maybe you build
-C++ for different platforms. Or maybe you maintain a popular library that
-different users need different features from.</p>
+C++ for different platforms. Or maybe you maintain a popular JavaScript library
+users only want parts of to keep their .js files small.</p>
 
 <p>These are examples of <em>configuration</em>: the process of building the same <em>code</em>
 with different <em>settings</em> to customize it for specific needs. In Bazel-speak,
@@ -178,27 +187,25 @@ a set of
 $ bazel build //my:cc_binary --cpu<span class="o">=</span>arm
 $ bazel build //my:android_binary --android_sdk<span class="o">=</span>@androidsdk//:sdk-28
 </code></pre></div>
-<p>This post reviews Bazel's <em>configurability work</em>, which is an ongoing effort to
-to make these tasks simple, flexible, and powerful. This is a deeper dive into
-themes covered in Bazel's <a href="https://bazel.build/roadmaps/configuration.html">configurability
-roadmap</a>.</p>
+<p>Bazel's <em>configurability work</em> is an ongoing effort to make these tasks simple,
+flexible, and powerful. </p>
 
-<h2>History</h2>
+<h2>The Problem</h2>
 
-<p>Bazel's a
+<p>Bazel is a
 <a href="https://docs.bazel.build/versions/master/bazel-vision.html">powerful</a> build
-tool that's especially suited for large,
-<a href="http://localhost:12345/2018/12/05/multilanguage-build-system.html">multi-language</a> builds. But it
-was born out of Google, which historically wrote code for homogeneous fleets of
+tool that's especially suited for large codebases with
+<a href="https://blog.bazel.build/2018/12/05/multilanguage-build-system.html">multiple languages</a>.
+But it grew out of Google, which historically wrote code for fleets of identical
 Linux servers with little need for customization. What customization was needed
-was achieved with ad hoc flags and logic built
-<a href="https://source.bazel.build/bazel/+/144912e7b7a86b45e07f79e76f6fed20890acb36:src/main/java/com/google/devtools/build/lib/rules/cpp/CppOptions.java;l=258">straight</a>
-into the build tool.</p>
+was achieved with
+<a href="https://source.bazel.build/bazel/+/144912e7b7a86b45e07f79e76f6fed20890acb36:src/main/java/com/google/devtools/build/lib/rules/cpp/CppOptions.java;l=258">ad hoc flags and logic</a>
+built straight into the tool.</p>
 
 <p>This is no longer true inside or outside of Google. Modern software targets
 phones, cloud, servers, desktops, <a href="https://en.wikipedia.org/wiki/Smart_device">smart
 devices</a> and more, and must offer
-increasingly flexible support for any intended combination of these platforms.</p>
+increasingly flexible support for any combination of these platforms.</p>
 
 <p>This means</p>
 <div class="highlight"><pre><code class="language-text" data-lang="text"><span></span>$ bazel build //my:binary
@@ -224,31 +231,25 @@ completely differently.</li>
 different targets need different flags.</li>
 <li><code>//my:binary</code>'s deps must use the same settings as their parent.</li>
 <li>It might be hard to remember which flags are needed by which targets,
-especially across users and dev/test/prod environments. This risks
-inconsistent and possibly incorrect builds.</li>
+especially across users and dev/test/prod machines. This makes it hard to
+be confident in the integrity of your builds.</li>
 </ol>
 
-<p>A different approach might be to set flags directly in targets that need them,
-let rule writers design the flags that affect their rules, and provide standard
-extensible APIs for cross-language concepts like <em>platform</em> and <em>cpu</em>. This
-lets people configure their projects on their own terms, using language
-consistent with how their projects are organized.</p>
-
-<p>Bazel's configurability work is redesigning Bazel around these ideas. It's
-ultimate goal is to make</p>
-<div class="highlight"><pre><code class="language-text" data-lang="text"><span></span>$ bazel build //:all
-</code></pre></div>
-<p><em>just work</em>, which means every target knows how to build "the right way", for
-whatever platform(s) and features you care about, and you only have to set
-flags that are genuinely interesting to you. All while keeping builds fast and
-correct.</p>
+<p>Another approach might be to set flags directly in targets that need them, let
+rule writers design the flags that affect their rules, and provide standard APIs
+for cross-language concepts like <em>platform</em> and <em>cpu</em>. This lets developers
+configure projects on their own terms, using language consistent with how their
+projects are organized. This is the essence of the work we're doing.</p>
 
 <h2>Configuration vs. Attributes</h2>
 
-<p>Rules have always had <a href="http://localhost:12345/2019/01/29/configurable-builds-part-1.html">attributes</a>, which also affect how they build. The
-difference between configuration and attributes is that attributes only affect
-the rule's <a href="https://docs.bazel.build/versions/master/skylark/rules.html#implementation-function">direct build actions</a>).
-This means attributes <strong>cannot affect a rule's dependencies</strong>.</p>
+<p>Rules have always had <a href="https://docs.bazel.build/versions/master/skylark/rules.html#attributes">attributes</a>,
+which also affect how they build. So why do we even need configuration?</p>
+
+<p>The difference between configuration and attributes is attributes only affect
+the rule's
+<a href="https://docs.bazel.build/versions/master/skylark/rules.html#implementation-function">direct build actions</a>.
+This means attributes <strong>cannot affect how a rule's dependencies build</strong>.</p>
 
 <p>For example, C++ rules have an attribute named
 <a href="https://docs.bazel.build/versions/master/be/c-cpp.html#cc_binary.copts"><code>copts</code></a>
@@ -266,8 +267,8 @@ the graph while configuration changes behavior <em>down</em> the graph.</p>
 
 <h2>Platforms</h2>
 
-<p>One of configurability's major efforts is designing a principled API for
-defining <em>platforms</em> and <em>toolchains</em>.</p>
+<p>One of our team's major goals is designing a principled API for defining
+<em>platforms</em> and <em>toolchains</em>.</p>
 
 <p>While there are many kinds of "ways" you might want to build your project, in
 practice most developers want the flexibility to target different devices,
@@ -296,9 +297,10 @@ Android? This impacts not just C++, but also the JDK and maybe even which
 support libraries you need.</p>
 
 <p>Not only are <code>--cpu</code> and <code>-crosstool_top</code> insufficiently expressive, but they
-might actively sabotoge you. Consider this use of
+might actively sabotoge you. Consider the following use of
 <a href="https://docs.bazel.build/versions/master/configurable-attributes.html">select</a>:</p>
-<div class="highlight"><pre><code class="language-python" data-lang="python"><span></span><span class="n">java_library</span><span class="p">(</span>
+<div class="highlight"><pre><code class="language-python" data-lang="python"><span></span><span class="n">config_setting</span><span class="p">(</span><span class="n">name</span> <span class="o">=</span> <span class="s2">"android"</span><span class="p">,</span> <span class="n">values</span> <span class="o">=</span> <span class="p">{</span><span class="s2">"cpu"</span><span class="p">:</span> <span class="s2">"arm"</span><span class="p">,</span> <span class="s2">"crosstool_top"</span><span class="p">:</span> <span class="s2">"//my:android_toolchain"</span><span class="p">})</span>
+<span class="n">java_library</span><span class="p">(</span>
     <span class="n">name</span> <span class="o">=</span> <span class="s2">"supporting_library"</span><span class="p">,</span>
     <span class="n">deps</span> <span class="o">=</span> <span class="n">select</span><span class="p">({</span>
         <span class="s2">":android"</span><span class="p">:</span> <span class="p">[</span><span class="s2">":extra_required_android_deps"</span><span class="p">],</span>
@@ -307,12 +309,12 @@ might actively sabotoge you. Consider this use of
 </code></pre></div>
 <p>If you use <code>--cpu</code> and <code>crosstool_top</code> to define what <code>:android</code> means, what
 happens when an app supports a new Android phone with a different CPU?
-<code>:android</code> won't trigger, the app won't get required Android support libraries,
-and it will crash.</p>
+<code>:android</code> won't trigger because <code>--cpu</code> no longer matches, the app won't get
+required Android support libraries, and it will crash.</p>
 
 <h3>A Better Way</h3>
 
-<p>Configurability's platform work, led by <a href="https://github.com/katre">@katre</a>,
+<p>The configurability's team's platform work, led by <a href="https://github.com/katre">@katre</a>,
 lets you declare exactly what you want in a way all rules understand. It
 doesn't even matter if no one's ever heard of your platform.</p>
 
@@ -322,13 +324,13 @@ doesn't even matter if no one's ever heard of your platform.</p>
 <span class="n">constraint_value</span><span class="p">(</span><span class="n">name</span> <span class="o">=</span> <span class="s2">"android"</span><span class="p">,</span> <span class="n">constraint_setting</span> <span class="o">=</span> <span class="s2">":os"</span><span class="p">)</span>
 <span class="n">constraint_value</span><span class="p">(</span><span class="n">name</span> <span class="o">=</span> <span class="s2">"linux"</span><span class="p">,</span> <span class="n">constraint_setting</span> <span class="o">=</span> <span class="s2">":os"</span><span class="p">)</span>
 
-<span class="n">constraint_setting</span><span class="p">(</span><span class="n">name</span> <span class="o">=</span> <span class="s2">"device"</span><span class="p">)</span> <span class="n">constraint_value</span><span class="p">(</span><span class="n">name</span> <span class="o">=</span> <span class="s2">"phone"</span><span class="p">,</span>
-<span class="n">constraint_setting</span> <span class="o">=</span> <span class="s2">":device"</span><span class="p">)</span> <span class="n">constraint_value</span><span class="p">(</span><span class="n">name</span> <span class="o">=</span> <span class="s2">"tablet"</span><span class="p">,</span>
-<span class="n">constraint_setting</span> <span class="o">=</span> <span class="s2">":device"</span><span class="p">)</span>
+<span class="n">constraint_setting</span><span class="p">(</span><span class="n">name</span> <span class="o">=</span> <span class="s2">"device"</span><span class="p">)</span>
+<span class="n">constraint_value</span><span class="p">(</span><span class="n">name</span> <span class="o">=</span> <span class="s2">"phone"</span><span class="p">,</span> <span class="n">constraint_setting</span> <span class="o">=</span> <span class="s2">":device"</span><span class="p">)</span>
+<span class="n">constraint_value</span><span class="p">(</span><span class="n">name</span> <span class="o">=</span> <span class="s2">"tablet"</span><span class="p">,</span> <span class="n">constraint_setting</span> <span class="o">=</span> <span class="s2">":device"</span><span class="p">)</span>
 
 <span class="n">platform</span><span class="p">(</span><span class="n">name</span> <span class="o">=</span> <span class="s2">"pixel3"</span><span class="p">,</span> <span class="n">constraint_values</span> <span class="o">=</span> <span class="p">[</span><span class="s2">":android"</span><span class="p">,</span> <span class="s2">":phone"</span><span class="p">])</span>
 </code></pre></div><div class="highlight"><pre><code class="language-python" data-lang="python"><span></span><span class="err">$</span> <span class="n">cat</span> <span class="n">helpers</span><span class="o">/</span><span class="n">BUILD</span>
-<span class="n">config_setting</span><span class="p">(</span><span class="n">name</span> <span class="o">=</span> <span class="s2">"android"</span><span class="p">,</span> <span class="n">constraint_values</span> <span class="o">=</span> <span class="s2">"//platforms:android"</span><span class="p">)</span>
+<span class="n">config_setting</span><span class="p">(</span><span class="n">name</span> <span class="o">=</span> <span class="s2">"android"</span><span class="p">,</span> <span class="n">constraint_values</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"//platforms:android"</span><span class="p">])</span>
 <span class="n">java_library</span><span class="p">(</span>
     <span class="n">name</span> <span class="o">=</span> <span class="s2">"supporting_library"</span><span class="p">,</span>
     <span class="n">deps</span> <span class="o">=</span> <span class="n">select</span><span class="p">({</span>
@@ -339,35 +341,35 @@ doesn't even matter if no one's ever heard of your platform.</p>
 <p>and built with:</p>
 <div class="highlight"><pre><code class="language-text" data-lang="text"><span></span>$ bazel build //my:binary --platforms=//platforms:pixel3 --define MYFEATURE=1
 </code></pre></div>
-<p>This is more concise and correct than before. Now it doesn't matter what the
-CPU is. Any platform with the <code>:android</code>
-<a href="https://docs.bazel.build/versions/master/be/platform.html#constraint_value"><code>constraint_value</code></a>
-is an Android platform. So it's easy to express <em>exactly</em> what you want and
-have <code>select</code>, rules, and toolchains understand it the same way. <code>MYFEATURE=1</code>,
-which isn't a platform property, remains as before.</p>
+<p>This is a significant improvement over before. It's more concise and you no
+longer have to care what the CPU is. <em>Any</em> platform tagged with <code>:android</code> is an
+Android platform. So it's easy to express <em>exactly</em> what you want and have
+<code>select</code>, rules, and toolchains understand it the same way. <code>MYFEATURE=1</code>, which
+isn't a platform property, remains as before.</p>
 
 <p>Rules understand <code>:android</code> by declaring <a href="https://docs.bazel.build/versions/master/toolchains.html#writing-rules-that-use-toolchains">toolchain types</a>.
 For example, <code>java_binary</code> can be defined in Starlark as</p>
-<div class="highlight"><pre><code class="language-python" data-lang="python"><span></span><span class="n">java_binary</span> <span class="o">=</span> <span class="n">rule</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">toolchains</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"//toolchain_types:java"</span><span class="p">])</span>
+<div class="highlight"><pre><code class="language-python" data-lang="python"><span></span><span class="n">java_binary</span> <span class="o">=</span> <span class="n">rule</span><span class="p">(</span><span class="o">...</span><span class="p">,</span> <span class="n">toolchains</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"@bazel_tools//tools/jdk:toolchain_type"</span><span class="p">])</span>
 </code></pre></div>
 <p>This tells Bazel that <code>java_binary</code> understands toolchains that set
-<code>["//toolchain_types:java"]</code>. You can then write a Java toolchain for Android
-as:</p>
+<code>["@bazel_tools//tools/jdk:toolchain_type""]</code>. You can then write a Java
+toolchain for Android as:</p>
 <div class="highlight"><pre><code class="language-python" data-lang="python"><span></span><span class="n">toolchain</span><span class="p">(</span>
     <span class="n">name</span> <span class="o">=</span> <span class="s2">"android_jdk"</span><span class="p">,</span>
-    <span class="n">toolchain_type</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"//toolchain_types:java"</span><span class="p">],</span>
+    <span class="n">toolchain_type</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"@bazel_tools//tools/jdk:toolchain_type"</span><span class="p">],</span>
     <span class="n">target_compatible_with</span> <span class="o">=</span> <span class="p">[</span><span class="s2">"//platforms:android"</span><span class="p">],</span>
     <span class="n">toolchain</span> <span class="o">=</span> <span class="s2">":android_jdk_provider_rule"</span><span class="p">)</span>
 </code></pre></div>
 <p>where <code>android_jdk_provider_rule</code> is a Starlark rule that
-<a href="ttps://docs.bazel.build/versions/master/skylark/rules.html#providers">provides</a>
+<a href="https://docs.bazel.build/versions/master/skylark/rules.html#providers">provides</a>
  access to the actual JDK tools.</p>
 
 <p>This takes some infrastructure to set up, but the result is magic. Call your
 build with <code>--platforms=//platforms:pixel3</code> and <code>java_binary</code> automatically
 uses <code>:android_jdk</code>. All rules can join in on this. The only obligations rule
-designers have are to write Starlark describing how their toolchains work and
-define toolchains for the platforms they want to support.</p>
+designers have are to write <a href="https://docs.bazel.build/versions/master/toolchains.html#defining-toolchains">Starlark rules</a>
+describing how their toolchains work and define toolchains for the platforms
+they support.</p>
 
 <p>This brings us closer to the goal of <code>$ bazel build //:all</code> <em>just working</em> by
 replacing ad hoc language-specific flags with a single flag that works everywhere.</p>
@@ -376,8 +378,9 @@ replacing ad hoc language-specific flags with a single flag that works everywher
 
 <p>You can use platforms today. The catch is that rules have to opt in support by
 including definitions of how their toolchains work. If you're designing a new
-set of rules, you should design them for platforms. But most existing rules
-predate this work and still rely on legacy flags like
+set of rules, you should <a href="https://docs.bazel.build/versions/master/toolchains.html">design</a>
+them for platforms. But most existing rules predate this work and still rely on
+legacy flags like
 <a href="https://source.bazel.build/bazel/+/0b84634f3be1118bdbd501f3d879382d6ae52307:src/main/java/com/google/devtools/build/lib/rules/java/JavaOptions.java;l=75"><code>--javabase</code></a>.</p>
 
 <p>As of this post, Bazel's platform work is heavily focused on rules migration. 
@@ -407,10 +410,9 @@ platform vision and <a href="https://github.com/hlopko">@hlopko</a> and
 
 <h2>Part 2...</h2>
 
-<p>Stay tuned for <em>Configurable Builds - Part 2</em>, ETA next week. We'll cover
-<em>transitions</em>, which make it possible to build different targets with different
-settings. We'll also discuss why you need to watch your build size when using
-these features.</p>
+<p>Stay tuned for <em>Configurable Builds - Part 2</em>, ETA next week. We'll talk about
+building different targets with different settings through <em>transitions</em>. We'll
+also discuss why you need to watch your build size when using these features.</p>
 
             </div>
             
@@ -419,7 +421,7 @@ these features.</p>
                 <div class="col-lg-3 hidden-sm hidden-xs">
           <h2>Twitter</h2>
           <p>For more frequent updates, follow us on Twitter.</p>
-          <p><iframe id="twitter-widget-0" scrolling="no" frameborder="0" allowtransparency="true" class="twitter-follow-button twitter-follow-button-rendered" style="position: static; visibility: visible; width: 157px; height: 28px;" title="Twitter Follow Button" src="./Configurable Builds - Part 1 - Bazel_files/follow_button.219ae0a24a0fde13418c38af0499134b.en.html" data-screen-name="bazelbuild"></iframe></p>
+          <p><iframe id="twitter-widget-0" scrolling="no" frameborder="0" allowtransparency="true" class="twitter-follow-button twitter-follow-button-rendered" style="position: static; visibility: visible; width: 157px; height: 28px;" title="Twitter Follow Button" src="./Configurable Builds - Part 1 - Bazel_files/follow_button.5b0c4d3ea3997aa2c22eac39be510646.en.html" data-screen-name="bazelbuild"></iframe></p>
           <h2>Discuss</h2>
           <p>Join the discussion on our <a href="https://groups.google.com/forum/#!forum/bazel-discuss">mailing list</a>.</p>
           <h2>Subscribe</h2>
@@ -563,4 +565,4 @@ Code from: https://dev.twitter.com/web/follow-button
 
   
 
-<iframe scrolling="no" frameborder="0" allowtransparency="true" src="./Configurable Builds - Part 1 - Bazel_files/widget_iframe.219ae0a24a0fde13418c38af0499134b.html" title="Twitter settings iframe" style="display: none;"></iframe></body></html>
+<iframe scrolling="no" frameborder="0" allowtransparency="true" src="./Configurable Builds - Part 1 - Bazel_files/widget_iframe.5b0c4d3ea3997aa2c22eac39be510646.html" title="Twitter settings iframe" style="display: none;"></iframe></body></html>
